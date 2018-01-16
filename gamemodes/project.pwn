@@ -1,5 +1,7 @@
 #include <a_samp>
 #include <a_mysql>
+#include <sscanf2>
+#include <zcmd>
 #include <logintextdraws-en>
 
 #define MYSQL_HOST        "sql9.freemysqlhosting.net" // Host
@@ -9,6 +11,14 @@
 
 new MySQL:handle; //TTL Mysql
 
+//Message
+#define SendErrorMessage(%0,%1) \
+	SendClientMessageEx(%0, COLOR_GREY, "[ERROR]:{FFFFFF} "%1)
+	
+#define SendServerMessage(%0,%1) \
+	SendClientMessageEx(%0, COLOR_ORANGE, "[SERVER]: "%1)
+//Timer
+new waktumain[MAX_PLAYERS];
 //Spawns w ambil dari grandlarc
 new Float:gRandomSpawns_LosSantos[][4] = {
 	{1751.1097,-2106.4529,13.5469,183.1979}, // El-Corona - Outside random house
@@ -44,11 +54,17 @@ new Float:gRandomSpawns_LosSantos[][4] = {
 	{2215.5181,-2627.8174,13.5469,273.7786}, // Ocean docks 1
 	{2509.4346,-2637.6543,13.6453,358.3565} // Ocean Docks spawn 2
 };
-
+//Warna
+#define COLOR_GREY        (0x888888C8)
+#define COLOR_ORANGE      (0xFFA500FF)
 //ID Dialognya
 #define DIALOG_REGISTER  1403
 #define DIALOG_LOGIN     2401
 #define DIALOG_SPAWN    1402
+#define DIALOG_STATS    1404
+#define DIALOG_CHANGEPS 1405
+#define DIALOG_CHANGEPS2 1406
+//PlayerData
 enum pDataEnum
 {
 	p_id,
@@ -61,6 +77,11 @@ enum pDataEnum
 	pSkin,
 	Float:pPos[4],
 	pSpawn,
+	Jam,
+	Menit,
+	Detik,
+	Admin,
+	Vip,
 	pDeaths
 }
 new PlayerInfo[MAX_PLAYERS][pDataEnum];
@@ -92,6 +113,11 @@ public OnPlayerConnect(playerid)
 	PlayerInfo[playerid][pDeaths]    = 0;
 	PlayerInfo[playerid][pSkin]    = 0;
 	PlayerInfo[playerid][pSpawn]    = 0;
+	PlayerInfo[playerid][Jam]    = 0;
+	PlayerInfo[playerid][Menit]    = 0;
+	PlayerInfo[playerid][Detik]    = 0;
+	PlayerInfo[playerid][Admin]    = 0;
+	PlayerInfo[playerid][Vip]    = 0;
 	GetPlayerName(playerid, PlayerInfo[playerid][pName], MAX_PLAYER_NAME);
 	
 	//Check
@@ -175,6 +201,26 @@ public OnDialogResponse(playerid, dialogid, response, listitem, inputtext[])
 		mysql_pquery(handle, query, "OnUserLogin", "d", playerid);
 		return 1;
 	}
+	if(dialogid == DIALOG_CHANGEPS)
+	{
+		if(strlen(inputtext) < 3) return ShowPlayerDialog(playerid, DIALOG_LOGIN, DIALOG_STYLE_PASSWORD, "Ganti Password - Langkahh 1", "Tolong masukan password kamu saat ini:\n{FF0000}Setidaknya mempunyai 3 karakter!", "Lanjut", "Batal");
+
+		new query[256];
+		mysql_format(handle, query, sizeof(query), "SELECT * FROM users WHERE name = '%e' AND password = MD5('%e')", PlayerInfo[playerid][pName], inputtext);
+
+		mysql_pquery(handle, query, "ChangePass", "d", playerid);
+		return 1;
+	}
+	if(dialogid == DIALOG_CHANGEPS2)
+	{
+		if(strlen(inputtext) < 3) return ShowPlayerDialog(playerid, DIALOG_LOGIN, DIALOG_STYLE_PASSWORD, "Ganti Password - Langkahh 2", "Tolong masukan password kamu:\n{FF0000}Setidaknya mempunyai 3 karakter!", "Lanjut", "Batal");
+
+		new query[256];
+		mysql_format(handle, query, sizeof(query), "UPDATE users SET name = '%e', password = MD5('%e') WHERE id = '%d'", PlayerInfo[playerid][pName], inputtext, PlayerInfo[playerid][p_id]);
+		mysql_pquery(handle, query);
+		SendServerMessage(playerid, "Kamu berhasil mengganti passwordmu.");
+		return 1;
+	}
 	if(dialogid == DIALOG_SPAWN)
 	{
 	    if(listitem == 0)
@@ -196,6 +242,9 @@ public OnDialogResponse(playerid, dialogid, response, listitem, inputtext[])
 
 public OnPlayerDisconnect(playerid, reason)
 {
+	//Timer
+	KillTimer(waktumain[playerid]);
+	//Etc
 	PlayerInfo[playerid][Select]     = 0;
 	SaveUserStats(playerid);
 	DestroyPlayerLoginTextDraws(playerid);
@@ -225,15 +274,28 @@ public OnUserRegister(playerid)
 {
 	PlayerInfo[playerid][p_id] = cache_insert_id();
 	PlayerInfo[playerid][pLoggedIn]  = true;
-	SendClientMessage(playerid, 0x00FF00FF, "[AKUN] Pendaftaran berhasil.");
-	SendClientMessage(playerid, 0x00FF00FF, "[INFO] Silahkan pilih skin anda.");
+	SendServerMessage(playerid, "Kamu berhasil mendaftar di server kami.");
 	PlayerPlaySound(playerid, 1057 , 0.0, 0.0, 0.0);
 	TogglePlayerSpectating(playerid, 0);
 	PlayerInfo[playerid][Select] = 1;
 	HideLoginTextDraws(playerid);
 	return 1;
 }
-
+forward ChangePass(playerid);
+public ChangePass(playerid)
+{
+	new rows;
+	cache_get_row_count(rows);
+	if(rows == 0)
+	{
+		ShowPlayerDialog(playerid, DIALOG_CHANGEPS, DIALOG_STYLE_PASSWORD, "Ganti Password - Langkah 1", "Tolong masukan password kamu saat ini:\n{FF0000}Password salah!", "Lanjut", "Batal");
+	}
+	else
+	{
+		ShowPlayerDialog(playerid, DIALOG_CHANGEPS2, DIALOG_STYLE_PASSWORD, "Ganti Password - Langkah 2", "Tolong masukan password baru kamu:", "Lanjut", "Batal");
+	}
+	return 1;
+}
 forward OnUserLogin(playerid);
 public OnUserLogin(playerid)
 {
@@ -255,17 +317,41 @@ public OnUserLogin(playerid)
 		cache_get_value_name_float(0, "PosY", PlayerInfo[playerid][pPos][1]);
 		cache_get_value_name_float(0, "PosZ", PlayerInfo[playerid][pPos][2]);
 		cache_get_value_name_float(0, "PosA", PlayerInfo[playerid][pPos][3]);
+		cache_get_value_name_int(0, "Jam", PlayerInfo[playerid][Jam]);
+		cache_get_value_name_int(0, "Menit", PlayerInfo[playerid][Menit]);
+		cache_get_value_name_int(0, "Detik", PlayerInfo[playerid][Detik]);
+		cache_get_value_name_int(0, "Admin", PlayerInfo[playerid][Admin]);
+		cache_get_value_name_int(0, "Vip", PlayerInfo[playerid][Vip]);
 		PlayerInfo[playerid][pLoggedIn]  = true;
 		SendClientMessage(playerid, 0x00FF00FF, "[AKUN] Berhasil masuk.");
 		PlayerPlaySound(playerid, 1057 , 0.0, 0.0, 0.0);
 		GivePlayerMoney(playerid, PlayerInfo[playerid][pMoney]);
 		HideLoginTextDraws(playerid);
+		//Timer :)
+		waktumain[playerid] = SetTimerEx("TimeOnServer", 1000, 1, "i", playerid);
+
 		//Default Spawn Dialog
 		new listitems[] = "Spawn Bebas\nPosisi Terakhir";
 		ShowPlayerDialog(playerid, DIALOG_SPAWN, DIALOG_STYLE_LIST, "{00FF00}Lokasi Spawn", listitems, "Pilih", "");
 	}
 	return 1;
 }
+forward TimeOnServer(playerid);
+public TimeOnServer(playerid)
+{
+	PlayerInfo[playerid][Detik]++;
+	if(PlayerInfo[playerid][Detik] >= 60)
+	{
+		PlayerInfo[playerid][Menit]++;
+		PlayerInfo[playerid][Detik] = 0;
+	}
+	if(PlayerInfo[playerid][Menit] >= 60)
+	{
+		PlayerInfo[playerid][Menit] = 0;
+		PlayerInfo[playerid][Jam]++;
+	}
+}
+
 public OnPlayerSpawn(playerid)
 {
 	if(PlayerInfo[playerid][Select] == 1)
@@ -316,8 +402,8 @@ stock SaveUserStats(playerid)
     PlayerInfo[playerid][pSkin] = GetPlayerSkin(playerid);
 
 	new query[256];
-	mysql_format(handle, query, sizeof(query), "UPDATE users SET level = '%d', money = '%d', kills = '%d', deaths = '%d', skin = '%d', PosX = '%f', PosY = '%f', PosZ = '%f', PosA = '%f' WHERE id = '%d'",
-		PlayerInfo[playerid][pLevel], PlayerInfo[playerid][pMoney], PlayerInfo[playerid][pKills], PlayerInfo[playerid][pDeaths], PlayerInfo[playerid][pSkin], PlayerInfo[playerid][pPos][0], PlayerInfo[playerid][pPos][1], PlayerInfo[playerid][pPos][2], PlayerInfo[playerid][pPos][3], PlayerInfo[playerid][p_id]);
+	mysql_format(handle, query, sizeof(query), "UPDATE users SET level = '%d', money = '%d', kills = '%d', deaths = '%d', skin = '%d', PosX = '%f', PosY = '%f', PosZ = '%f', PosA = '%f', Jam = '%d', Menit = '%d', Detik = '%d', Admin = '%d', Vip = '%d' WHERE id = '%d'",
+		PlayerInfo[playerid][pLevel], PlayerInfo[playerid][pMoney], PlayerInfo[playerid][pKills], PlayerInfo[playerid][pDeaths], PlayerInfo[playerid][pSkin], PlayerInfo[playerid][pPos][0], PlayerInfo[playerid][pPos][1], PlayerInfo[playerid][pPos][2], PlayerInfo[playerid][pPos][3], PlayerInfo[playerid][Jam], PlayerInfo[playerid][Menit], PlayerInfo[playerid][Detik], PlayerInfo[playerid][Admin], PlayerInfo[playerid][Vip], PlayerInfo[playerid][p_id]);
 
 	mysql_pquery(handle, query);
 	return 1;
@@ -430,5 +516,97 @@ AddPlayerClasses()
 	AddPlayerClass(97,1759.0189,-1898.1260,13.5622,266.4503,-1,-1,-1,-1,-1,-1);
 	AddPlayerClass(98,1759.0189,-1898.1260,13.5622,266.4503,-1,-1,-1,-1,-1,-1);
 	AddPlayerClass(99,1759.0189,-1898.1260,13.5622,266.4503,-1,-1,-1,-1,-1,-1);
+	return 1;
+}
+stock SendClientMessageEx(playerid, color, const text[], {Float, _}:...)
+{
+	static
+	    args,
+	    str[144];
+
+	/*
+     *  Custom function that uses #emit to format variables into a string.
+     *  This code is very fragile; touching any code here will cause crashing!
+	*/
+	if ((args = numargs()) == 3)
+	{
+	    SendClientMessage(playerid, color, text);
+	}
+	else
+	{
+		while (--args >= 3)
+		{
+			#emit LCTRL 5
+			#emit LOAD.alt args
+			#emit SHL.C.alt 2
+			#emit ADD.C 12
+			#emit ADD
+			#emit LOAD.I
+			#emit PUSH.pri
+		}
+		#emit PUSH.S text
+		#emit PUSH.C 144
+		#emit PUSH.C str
+		#emit PUSH.S 8
+		#emit SYSREQ.C format
+		#emit LCTRL 5
+		#emit SCTRL 4
+
+		SendClientMessage(playerid, color, str);
+
+		#emit RETN
+	}
+	return 1;
+}
+CMD:changepass(playerid, params[])
+{
+	ShowPlayerDialog(playerid, DIALOG_CHANGEPS, DIALOG_STYLE_PASSWORD, "Ganti Password - Langkah 1", "Tolong masukan password kamu saat ini:", "Lanjut", "Batal"); // showing the player a dialog
+	return 1;
+}
+CMD:stats(playerid, params[])
+{
+	static
+	    userid;
+	    
+	if (sscanf(params, "u", userid))
+	{
+	    userid = playerid;
+	}
+	
+    if (userid == INVALID_PLAYER_ID)
+	    return SendErrorMessage(playerid, "Player tidak valid.");
+
+	new pDialog[196], string[1200];
+	new Float:ratio=floatdiv(PlayerInfo[userid][pKills], PlayerInfo[userid][pDeaths]);
+	format(pDialog, sizeof(pDialog), "{00FF00}%s(%d)\n\n", PlayerInfo[userid][pName], userid);
+	strcat(string, pDialog);
+	strcat(string, "{00FF00}General:\n");
+	format(pDialog, sizeof(pDialog), "{FFFFFF}Account id	: %d\n", PlayerInfo[userid][p_id]);
+	strcat(string, pDialog);
+	format(pDialog, sizeof(pDialog), "Admin		: %d\n", PlayerInfo[userid][Admin]);
+	strcat(string, pDialog);
+	format(pDialog, sizeof(pDialog), "VIP		: %d\n", PlayerInfo[userid][Vip]);
+	strcat(string, pDialog);
+	format(pDialog, sizeof(pDialog), "Skin		: %d\n\n", GetPlayerSkin(playerid));
+	strcat(string, pDialog);
+	strcat(string, "{00FF00}Scores:\n");
+	format(pDialog, sizeof(pDialog), "{FFFFFF}Level		: %d\n", PlayerInfo[userid][pLevel]);
+	strcat(string, pDialog);
+	format(pDialog, sizeof(pDialog), "Money		: %d\n", PlayerInfo[userid][pMoney]);
+	strcat(string, pDialog);
+	format(pDialog, sizeof(pDialog), "Playtime	: %d\n", PlayerInfo[userid][Jam]);
+	strcat(string, pDialog);
+	format(pDialog, sizeof(pDialog), "Kills		: %d\n", PlayerInfo[userid][pKills]);
+	strcat(string, pDialog);
+	format(pDialog, sizeof(pDialog), "Deaths              : %d\n", PlayerInfo[userid][pDeaths]);
+	strcat(string, pDialog);
+	format(pDialog, sizeof(pDialog), "Ratio		: %.2f\n\n", ratio);
+	strcat(string, pDialog);
+	strcat(string, "{00FF00}Others:\n");
+	format(pDialog, sizeof(pDialog), "{FFFFFF}Interior	: %d\n", GetPlayerInterior(userid));
+	strcat(string, pDialog);
+	format(pDialog, sizeof(pDialog), "World		: %d\n", GetPlayerVirtualWorld(userid));
+	strcat(string, pDialog);
+	ShowPlayerDialog(playerid, DIALOG_STATS, DIALOG_STYLE_MSGBOX, "{00FF00}Statistik", string, "Tutup", "");
 	return 1;
 }
